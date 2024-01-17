@@ -6,7 +6,7 @@
 ! distributed with this code, or at http://mpas-dev.github.com/license.html
 !
 
-!#define HALO_EXCH_DEBUG
+#define HALO_EXCH_DEBUG
 
 module test_core_halo_exch
 
@@ -51,7 +51,7 @@ module test_core_halo_exch
 
       call mpas_timer_start('halo exch tests')
       if ( threadNum == 0 ) then
-         call mpas_log_write(' - Performing exchange group tests')
+         call mpas_log_write(' - Performing group halo exchange tests')
       end if
       call test_core_halo_exch_group_test(domain, threadErrs, iErr)
       call mpas_threading_barrier()
@@ -104,7 +104,7 @@ module test_core_halo_exch
       integer, dimension(:), intent(out) :: threadErrs
       integer, intent(out) :: err
 
-      type (mpas_pool_type), pointer :: haloExchTestPool
+      type (mpas_pool_type), pointer :: meshPool, haloExchTestPool
 
       type (field5DReal), pointer :: real5DField
       type (field4DReal), pointer :: real4DField
@@ -116,6 +116,10 @@ module test_core_halo_exch
       type (field1DInteger), pointer :: int1DField
 
       integer :: threadNum
+      integer, dimension(:), allocatable :: interiorCells
+      integer, dimension(:,:), pointer :: cellsOnCell
+      integer, dimension(:), pointer :: nEdgesOnCell
+      integer, pointer :: nCellsSolve, nEdgesSolve, nVerticesSolve
 
       threadNum = mpas_threading_get_thread_num() + 1
 
@@ -128,6 +132,7 @@ module test_core_halo_exch
       call mpas_timer_start('old halo exchanges')
       ! Perform halo exchanges
       call mpas_pool_get_subpool(domain % blocklist % structs, 'haloExchTest', haloExchTestPool)
+      call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
 
       ! Exchange persistent cell fields
       call mpas_pool_get_field(haloExchTestPool, 'cellPersistReal5D', real5DField)
@@ -158,10 +163,14 @@ module test_core_halo_exch
       call mpas_pool_get_field(haloExchTestPool, 'edgePersistInt2D', int2DField)
       call mpas_pool_get_field(haloExchTestPool, 'edgePersistInt1D', int1DField)
 
+      call MPAS_pool_get_array(meshPool, "cellsOnCell", cellsOnCell)
+      call MPAS_pool_get_array(meshPool, "nEdgesOnCell", nEdgesOnCell)
+      call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
+      interiorCells = findInteriorCells(nCellsSolve, cellsOnCell, nEdgesOnCell)
       call mpas_dmpar_exch_halo_field(real5DField)
       call mpas_dmpar_exch_halo_field(real4DField)
       call mpas_dmpar_exch_halo_field(real3DField)
-      call mpas_dmpar_exch_halo_field(real2DField)
+      call mpas_dmpar_exch_halo_field(real2DField, interiorCells=interiorCells)
       call mpas_dmpar_exch_halo_field(real1DField)
       call mpas_dmpar_exch_halo_field(int3DField)
       call mpas_dmpar_exch_halo_field(int2DField)
@@ -249,6 +258,7 @@ module test_core_halo_exch
 
       call test_core_halo_exch_validate_fields(domain, threadErrs, err)
 
+      call test_halo_adj_exch_fields(domain, threadErrs, err)
    end subroutine test_core_halo_exch_full_test!}}}
 
 
@@ -1370,5 +1380,167 @@ module test_core_halo_exch
 
    end subroutine test_core_halo_exch_validate_fields!}}}
 
+   !***********************************************************************
+   !> \brief   Identify interior and edge cells
+   !> \details 
+   !>  This function identifies cells which are on the interior, vs cells on the edge
+   !>  (cells with neighbors which aren't in this block).
+   !>  Returns a vector of flags corresponding to the array of cells, where a value of one indicates
+   !>  the cell is interior, and a value of zero indicates the cell is on an edge of this block.
+   !-----------------------------------------------------------------------
+   function findInteriorCells(nCells, cellsOnCell, edgesOnCell) result(interiorCells)
+      integer, intent(in) :: nCells !< the number of cells to check for being edge/interior
+      integer, dimension(:,:), intent(in) :: cellsOnCell !< array containing adjacent cells for each cell
+      integer, dimension(:), intent(in) :: edgesOnCell !< array containing edges for each cell
+
+      integer, dimension(:), allocatable :: interiorCells
+      integer nInterior, nEdge, iCell, iEdgeOnCell
+
+      allocate(interiorCells(nCells))
+      nInterior = 0
+      nEdge = 0
+      do iCell = 1, nCells
+         interiorCells(iCell) = 1
+         nInterior = nInterior + 1
+
+         do iEdgeOnCell = 1, edgesOnCell(iCell)
+            if (cellsOnCell(iEdgeOnCell,iCell) > nCells) then
+               interiorCells(iCell) = 0
+               nEdge = nEdge + 1
+               nInterior = nInterior - 1
+#ifdef HALO_EXCH_DEBUG
+               !call mpas_log_write('  cell:$i needs halo:$i', intArgs=(/iCell, cellsOnCell(iEdgeOnCell,iCell)/))
+#endif
+               exit
+            endif
+         enddo ! iEdgeOnCell
+      enddo ! iCell
+#ifdef HALO_EXCH_DEBUG
+      call mpas_log_write(' halo nInterior:$i nEdge:$i', intArgs=(/nInterior, nEdge/))
+#endif
+   end function findInteriorCells
+
+   !***********************************************************************
+   !> \brief   MPAS Test Core halo adjoint exchange
+   !> \details 
+   !>  This routine applies the halo adjoint function to a 2D array and verifies
+   !>  interior cell's values don't change, and border cell's values are modified.
+   !>  It assumes a halo exchange has already been applied.
+   !>  Returns 0 on success, non-0 on failure.
+   !-----------------------------------------------------------------------
+   subroutine test_halo_adj_exch_fields(domain, threadErrs, err)
+      type (domain_type), intent(inout) :: domain
+      integer, dimension(:), intent(out) :: threadErrs
+      integer, intent(out) :: err
+
+      type (block_type), pointer :: block
+      type (mpas_pool_type), pointer :: meshPool, haloExchTestPool
+      type (field2DReal), pointer :: real2DField
+      real (kind=RKIND), dimension(:, :), pointer :: real2D
+      real (kind=RKIND), dimension(:, :), allocatable :: real2Dorig
+      integer, dimension(:,:), pointer :: cellsOnCell
+      integer, dimension(:), pointer :: nEdgesOnCell
+      integer, dimension(:), allocatable :: interiorCells
+      integer, pointer :: nCells, nCellsSolve
+      integer :: iCell, iEdgeOnCell, nInterior, nEdge
+
+      err = 0
+      ! get a variable to call the adjoint halo on
+      block => domain % blocklist
+
+      call mpas_pool_get_subpool(block % structs, 'haloExchTest', haloExchTestPool)
+      call mpas_pool_get_subpool(block % structs, 'mesh', meshPool)
+      call mpas_pool_get_field(haloExchTestPool, 'cellPersistReal2D', real2DField)
+      call mpas_pool_get_dimension(haloExchTestPool, 'nCells', nCells)
+      call mpas_pool_get_dimension(haloExchTestPool, 'nCellsSolve', nCellsSolve)
+      call mpas_log_write(' test_halo_adj_exch_fields nCellsSolve:$i nCells:$i', intArgs=(/nCellsSolve, nCells/))
+
+      ! make a copy of the data before applying the adjoint halo
+      call mpas_pool_get_array(haloExchTestPool, 'cellPersistReal2D', real2D)
+      call mpas_log_write(' halo_adj_ real2D size:$ix$i', intArgs=(/size(real2D,2), size(real2D, 1)/))
+      allocate(real2Dorig(size(real2D, 2), size(real2D, 1)))
+      real2Dorig = real2D
+
+      ! find cells with adjoining ghost cells
+      call MPAS_pool_get_array(meshPool, "cellsOnCell", cellsOnCell)
+      call MPAS_pool_get_array(meshPool, "nEdgesOnCell", nEdgesOnCell)
+      call mpas_log_write(' halo_adj_ cellsOnCell size:$ix$i', intArgs=(/size(cellsOnCell,2), size(cellsOnCell, 1)/))
+
+      interiorCells = findInteriorCells(nCellsSolve, cellsOnCell, nEdgesOnCell)
+
+      ! run the adjoint halo, this will update owned cells
+      call mpas_dmpar_exch_halo_adj_field(real2DField, interiorCells=interiorCells)
+      !call mpas_dmpar_exch_halo_adj_field(real2DField)
+
+      !do while ( associated(block) )
+
+         call mpas_log_write(' test_halo_adj_exch_fields block:$i next is null:$l', &
+            intArgs=(/block%blockID/), logicArgs=(/.not. associated(block%next)/))
+
+         ! get the real2D array after calling mpas_dmpar_exch_halo_adj_field
+         call mpas_pool_get_array(haloExchTestPool, 'cellPersistReal2D', real2D)
+         call mpas_log_write(' halo orig size($i, $i) adj size($i, $i)', &
+                         intArgs=(/size(real2Dorig, 2), size(real2Dorig, 1), &
+                            size(real2D, 2), size(real2D, 1)/))
+
+         ! check the adjoint halo operation populated fields correctly
+         err = check_adjoint_values(nCellsSolve, real2Dorig, real2D, interiorCells)
+         !block => block % next
+      !end do
+   end subroutine test_halo_adj_exch_fields
+
+   !***********************************************************************
+   !> \brief   MPAS Test check pre & post adjoint exchange values
+   !> \details 
+   !>  This routine checks the pre-adjoint halo exchange values aganst
+   !>  post-adjoint halo exhange values.
+   !>  Interior cell's values aren't expected to change, and border cell's values are 
+   ! > expected to change.
+   !>  Returns 0 on success, non-0 on failure.
+   !-----------------------------------------------------------------------
+   integer function check_adjoint_values(nCellsSolve, orig, adjoint, interiorCells) 
+      integer, pointer, intent(in) :: nCellsSolve !< the number of local owned cells
+      real (kind=RKIND), dimension(:,:), intent(in) :: orig !< values of the cells before applying the adjoint exchange
+      real (kind=RKIND), dimension(:,:), intent(in) :: adjoint !< values of cells after applying the adjoint exchange
+      integer, dimension(:), intent(in) :: interiorCells !< array indicating a cell is interior on on the edge
+
+      integer :: i, j, iCell, iEdgeOnCell, nError, nInterior, nEdge
+      integer :: iDim1, iDim2
+
+      nError = 0;
+      iDim1 = nCellsSolve
+      iDim2 = size(orig, dim=1)
+      nInterior = 0
+      nEdge = 0
+
+      do i = 1, iDim1
+         do j = 1, iDim2
+            if (interiorCells(i) .eq. 1) then
+               if (j == 1) then
+                  nInterior = nInterior + 1
+                  ! interior cells shouldn't have changed
+                  if (orig(j, i) /= adjoint(j, i)) then
+                     call mpas_log_write(' halo changed value for interior cell at:$i:$i orig:$r new:$r', &
+                        intArgs=(/j,i/), realArgs=(/orig(j,i), adjoint(j,i)/))
+                     nError = nError + 1
+                  end if
+               end if
+            else
+               if (j == 1) then
+                  nEdge = nEdge + 1
+                  ! edge cells should change
+                  if (orig(j, i) .eq. adjoint(j, i)) then
+                     call mpas_log_write(' halo unchanged value for edge cell at:$i:$i $r vs $r', &
+                        intArgs=(/i,j/), realArgs=(/orig(j, i), adjoint(j, i)/))
+                     nError = nError + 1
+                  end if
+               end if
+            end if
+         end do
+      end do
+      call mpas_log_write('  halo nInterior:$i nEdge:$i, nError:$i', intArgs=(/nInterior, nEdge, nError/))
+
+      check_adjoint_values = nError
+   end function check_adjoint_values
 
 end module test_core_halo_exch
