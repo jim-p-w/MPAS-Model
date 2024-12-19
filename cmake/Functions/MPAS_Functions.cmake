@@ -80,10 +80,17 @@ function(mpas_fortran_target target)
 
     # Global Fortran configuration
     set_target_properties(${target} PROPERTIES Fortran_FORMAT FREE)
-    set(MPAS_FORTRAN_TARGET_COMPILE_DEFINITIONS
-        _MPI=1
-        USE_PIO2=1
-    )
+    if(MPAS_USE_SMIOL)
+        set(MPAS_FORTRAN_TARGET_COMPILE_DEFINITIONS
+            _MPI=1
+            MPAS_SMIOL_SUPPORT=1
+        )
+    else()
+        set(MPAS_FORTRAN_TARGET_COMPILE_DEFINITIONS
+            _MPI=1
+            USE_PIO2=1
+        )
+    endif()
     # Enable OpenMP support
     if(MPAS_OPENMP)
         target_link_libraries(${target} PUBLIC OpenMP::OpenMP_Fortran)

@@ -38,11 +38,24 @@ set(MPAS_FRAMEWORK_SOURCES
 
 add_library(framework ${MPAS_FRAMEWORK_SOURCES})
 set_MPAS_DEBUG_flag(framework)
-set(FRAMEWORK_COMPILE_DEFINITIONS
+if (MPAS_USE_SMIOL)
+    set(FRAMEWORK_COMPILE_DEFINITIONS
+        MPAS_SMIOL_SUPPORT
+        mpas=1
+        MPAS_NATIVE_TIMERS)
+    set(IO_LIBS
+        ${PROJECT_NAME}::external::smiolf
+        ${PROJECT_NAME}::external::smiol)
+else()
+    set(FRAMEWORK_COMPILE_DEFINITIONS
         USE_PIO2
         MPAS_PIO_SUPPORT
         mpas=1
         MPAS_NATIVE_TIMERS)
+    set(IO_LIBS
+        PIO::PIO_Fortran
+        PIO::PIO_C)
+endif()
 target_compile_definitions(framework PRIVATE ${FRAMEWORK_COMPILE_DEFINITIONS})
 
 mpas_fortran_target(framework)
@@ -53,8 +66,7 @@ set_target_properties(framework PROPERTIES OUTPUT_NAME mpas_framework)
 set(FRAMEWORK_LINK_LIBRARIES
         ${PROJECT_NAME}::external::esmf
         ${PROJECT_NAME}::external::ezxml
-        PIO::PIO_Fortran
-        PIO::PIO_C
+        ${IO_LIBS}
         PnetCDF::PnetCDF_Fortran
         NetCDF::NetCDF_Fortran
         NetCDF::NetCDF_C
