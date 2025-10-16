@@ -12,7 +12,8 @@ OBJS = mpas_test_core.o \
        mpas_test_core_dmpar.o \
        mpas_test_core_stream_inquiry.o \
        mpas_test_openacc.o \
-       mpas_test_core_stream_list.o
+       mpas_test_core_stream_list.o \
+       mpas_test_core_io.o \
 
 all: core_test
 
