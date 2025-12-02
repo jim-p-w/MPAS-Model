@@ -318,6 +318,7 @@ int SMIOL_open_file(struct SMIOL_context *context, const char *filename,
 	(*file)->io_file_comm = MPI_Comm_c2f(io_file_comm);
 
 
+    fprintf(stderr, "in SMIOL_open_file rank:%d\n", context->comm_rank);
 	if (mode & SMIOL_FILE_CREATE) {
 #ifdef SMIOL_PNETCDF
 		if ((*file)->io_task) {
@@ -448,6 +449,7 @@ int SMIOL_close_file(struct SMIOL_file **file)
 
 	io_file_comm = MPI_Comm_f2c((*file)->io_file_comm);
 	io_group_comm = MPI_Comm_f2c((*file)->io_group_comm);
+    fprintf(stderr, "in SMIOL_close_file rank:%d\n", (*file)->context->comm_rank);
 
 #ifdef SMIOL_PNETCDF
 	if ((*file)->io_task) {
@@ -577,6 +579,7 @@ int SMIOL_define_dim(struct SMIOL_file *file, const char *dimname, SMIOL_Offset 
 	/*
 	 * If the file is in data mode, then switch it to define mode
 	 */
+    fprintf(stderr, "in SMIOL_define_dim rank:%d\n", file->context->comm_rank);
 	if (file->state == PNETCDF_DATA_MODE) {
 		if (file->io_task) {
 			ierr = ncmpi_redef(file->ncidp);
@@ -791,6 +794,7 @@ int SMIOL_define_var(struct SMIOL_file *file, const char *varname, int vartype, 
 	/*
 	 * Build a list of dimension IDs
 	 */
+    fprintf(stderr, "in SMIOL_define_var rank:%d\n", file->context->comm_rank);
 	for (i=0; i<ndims; i++) {
 		if (file->io_task) {
 			ierr = ncmpi_inq_dimid(file->ncidp,
@@ -1213,9 +1217,12 @@ int SMIOL_put_var(struct SMIOL_file *file, const char *varname,
 
 		if (file->state == PNETCDF_DEFINE_MODE) {
 			if (file->io_task) {
+    fprintf(stderr, "in SMIOL_put_var before ncmpi_enddef ncidp:%d rank:%d\n", file->ncidp, file->context->comm_rank);
 				ierr = ncmpi_enddef(file->ncidp);
+    fprintf(stderr, "in SMIOL_put_var after ncmpi_enddef rank:%d\n", file->context->comm_rank);
 			}
 			MPI_Bcast(&ierr, 1, MPI_INT, 0, io_group_comm);
+    fprintf(stderr, "in SMIOL_put_var after MPI_Bcast rank:%d\n", file->context->comm_rank);
 			if (ierr != NC_NOERR) {
 				file->context->lib_type = SMIOL_LIBRARY_PNETCDF;
 				file->context->lib_ierr = ierr;
@@ -1431,7 +1438,9 @@ int SMIOL_get_var(struct SMIOL_file *file, const char *varname,
 
 		if (file->state == PNETCDF_DEFINE_MODE) {
 			if (file->io_task) {
+    fprintf(stderr, "in SMIOL_get_var before ncmpi_enddef rank:%d\n", file->context->comm_rank);
 				ierr = ncmpi_enddef(file->ncidp);
+    fprintf(stderr, "in SMIOL_get_var after ncmpi_enddef rank:%d\n", file->context->comm_rank);
 			}
 			MPI_Bcast(&ierr, 1, MPI_INT, 0, io_group_comm);
 			if (ierr != NC_NOERR) {
@@ -1503,11 +1512,13 @@ int SMIOL_get_var(struct SMIOL_file *file, const char *varname,
 			if (file->n_reqs > 0) {
 				int statuses[MAX_REQS];
 
+    fprintf(stderr, "in SMIOL_get_var before ncmpi_wait_all rank:%d\n", file->context->comm_rank);
 				ierr = ncmpi_wait_all(file->ncidp, file->n_reqs,
 				                      file->reqs, statuses);
 				file->n_reqs = 0;
 
 				if (ierr == NC_NOERR) {
+    fprintf(stderr, "in SMIOL_get_var before ncmpi_sync rank:%d\n", file->context->comm_rank);
 					ierr = ncmpi_sync(file->ncidp);
 				}
 			}
@@ -1668,6 +1679,7 @@ int SMIOL_define_att(struct SMIOL_file *file, const char *varname,
 	 * is a global attribute not associated with a specific variable
 	 */
 	if (varname != NULL) {
+    fprintf(stderr, "in SMIOL_define_att varname:%s attname:%s rank:%d\n", varname, att_name, file->context->comm_rank);
 		if (file->io_task) {
 			ierr = ncmpi_inq_varid(file->ncidp, varname, &varidp);
 		}
@@ -1678,6 +1690,7 @@ int SMIOL_define_att(struct SMIOL_file *file, const char *varname,
 			return SMIOL_LIBRARY_ERROR;
 		}
 	} else {
+    fprintf(stderr, "in SMIOL_define_att name:%s rank:%d\n", att_name, file->context->comm_rank);
 		varidp = NC_GLOBAL;
 	}
 
@@ -1706,7 +1719,9 @@ int SMIOL_define_att(struct SMIOL_file *file, const char *varname,
 	 */
 	if (file->state == PNETCDF_DATA_MODE) {
 		if (file->io_task) {
+    fprintf(stderr, "in SMIOL_define_att before ncmpi_redef rank:%d\n", file->context->comm_rank);
 			ierr = ncmpi_redef(file->ncidp);
+    fprintf(stderr, "in SMIOL_define_att after ncmpi_redef rank:%d\n", file->context->comm_rank);
 		}
 		MPI_Bcast(&ierr, 1, MPI_INT, 0, io_group_comm);
 		if (ierr != NC_NOERR) {
@@ -1933,6 +1948,7 @@ int SMIOL_sync_file(struct SMIOL_file *file)
 	 */
 	if (file->state == PNETCDF_DEFINE_MODE) {
 		if (file->io_task) {
+    fprintf(stderr, "in SMIOL_sync_file before ncmpi_enddef rank:%d\n", file->context->comm_rank);
 			ierr = ncmpi_enddef(file->ncidp);
 		}
 		MPI_Bcast(&ierr, 1, MPI_INT, 0, io_group_comm);
@@ -1950,12 +1966,14 @@ int SMIOL_sync_file(struct SMIOL_file *file)
 		if (file->n_reqs > 0) {
 			int statuses[MAX_REQS];
 
+    fprintf(stderr, "in SMIOL_sync_file before ncmpi_wait_all rank:%d\n", file->context->comm_rank);
 			ierr = ncmpi_wait_all(file->ncidp, file->n_reqs,
 			                      file->reqs, statuses);
 			file->n_reqs = 0;
 		}
 
 		if (ierr == NC_NOERR) {
+    fprintf(stderr, "in SMIOL_sync_file before ncmpi_sync rank:%d\n", file->context->comm_rank);
 			ierr = ncmpi_sync(file->ncidp);
 		}
 	}
@@ -2603,6 +2621,7 @@ int write_chunk_pnetcdf(struct SMIOL_file *file,
 	 * just write with a single call to the blocking write interface.
 	 */
 	if (ndims == 0 || (has_unlimited_dim && ndims == 1)) {
+    fprintf(stderr, "in write_chunk_pnetcdf before ncmpi_bput_vara rank:%d\n", file->context->comm_rank);
 		ierr = ncmpi_bput_vara(file->ncidp,
 		                       varidp,
 		                       mpi_start, mpi_count,
@@ -2669,6 +2688,7 @@ int write_chunk_pnetcdf(struct SMIOL_file *file,
 		 * most 2 GiB at a time
 		 */
 		while (!global_done) {
+    fprintf(stderr, "in write_chunk_pnetcdf before ncmpi_put_vara_all rank:%d\n", file->context->comm_rank);
 			ierr = ncmpi_put_vara_all(file->ncidp,
 			                          varidp,
 			                          mpi_start, mpi_count,
@@ -2729,12 +2749,14 @@ int write_chunk_pnetcdf(struct SMIOL_file *file,
 		 */
 		if ((size_t)max_usage > file->bufsize
 		    || file->n_reqs == MAX_REQS) {
+    fprintf(stderr, "in write_chunk_pnetcdf before ncmpi_wait_all rank:%d\n", file->context->comm_rank);
 			ierr = ncmpi_wait_all(file->ncidp, file->n_reqs,
 			                      file->reqs, NULL);  /* statuses */
 			file->n_reqs = 0;
 		}
 
 		if (ierr == NC_NOERR) {
+    fprintf(stderr, "in write_chunk_pnetcdf before ncmpi_bput_vara rank:%d\n", file->context->comm_rank);
 			ierr = ncmpi_bput_vara(file->ncidp,
 			                       varidp,
 			                       mpi_start, mpi_count,

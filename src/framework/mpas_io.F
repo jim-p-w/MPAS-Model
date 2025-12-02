@@ -2775,7 +2775,7 @@ module mpas_io
 
 #ifdef MPAS_SMIOL_SUPPORT
       if (local_ierr /= SMIOL_SUCCESS) then
-         call mpas_log_write('SMIOLf_get_var failed with error $i', intArgs=[local_ierr], messageType=MPAS_LOG_ERR)
+         call mpas_log_write('SMIOLf_get_var '//fieldname//' failed with error $i', intArgs=[local_ierr], messageType=MPAS_LOG_ERR)
          if (local_ierr == SMIOL_LIBRARY_ERROR) then
             call mpas_log_write(trim(SMIOLf_lib_error_string(handle % ioContext % smiol_context)), messageType=MPAS_LOG_ERR)
          else
